@@ -367,6 +367,60 @@ func TestReclaimSurvivesHeartbeat(t *testing.T) {
 	}
 }
 
+// TestReleaseByEnvID — reconciler shortcut: one call frees all GPUs an env held.
+func TestReleaseByEnvID(t *testing.T) {
+	s, _, _ := newTestSched(t, 4)
+	ctx := context.Background()
+
+	// One env grabs two GPUs (e.g., distributed training).
+	a1, err := s.Allocate(ctx, "u1", envID(0), allUUIDs(4)[:2], 30*time.Second)
+	if err != nil {
+		t.Fatalf("alloc 1: %v", err)
+	}
+	a2, err := s.Allocate(ctx, "u1", envID(0), allUUIDs(4)[1:3], 30*time.Second)
+	if err != nil {
+		t.Fatalf("alloc 2: %v", err)
+	}
+	// And another env grabs one GPU (must not be touched).
+	other, err := s.Allocate(ctx, "u1", envID(1), allUUIDs(4)[3:], 30*time.Second)
+	if err != nil {
+		t.Fatalf("alloc other: %v", err)
+	}
+
+	n, err := s.ReleaseByEnvID(ctx, envID(0), StateFailed)
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("released n=%d, want 2", n)
+	}
+
+	// Both env-0 allocations are now failed.
+	for _, id := range []int64{a1.ID, a2.ID} {
+		got, _ := s.GetByID(ctx, id)
+		if got.State != StateFailed {
+			t.Errorf("alloc %d state=%s, want failed", id, got.State)
+		}
+	}
+	// Other env's allocation untouched.
+	got, _ := s.GetByID(ctx, other.ID)
+	if got.State != StateAllocated {
+		t.Errorf("other alloc state=%s, want allocated", got.State)
+	}
+
+	// Idempotent: second call releases nothing.
+	if n, _ := s.ReleaseByEnvID(ctx, envID(0), StateFailed); n != 0 {
+		t.Errorf("second release n=%d, want 0", n)
+	}
+}
+
+func TestReleaseByEnvIDInvalidState(t *testing.T) {
+	s, _, _ := newTestSched(t, 1)
+	if _, err := s.ReleaseByEnvID(context.Background(), envID(0), "allocated"); err == nil {
+		t.Errorf("expected error for invalid final state")
+	}
+}
+
 // TestUUIDStabilityAcrossReboot (T10) — DB-side allocations are keyed by UUID,
 // so a host reboot that re-orders device indexes does not invalidate them.
 func TestUUIDStabilityAcrossReboot(t *testing.T) {

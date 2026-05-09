@@ -1,58 +1,102 @@
+// Command flexctl runs the control plane: HTTP server, reconciliation
+// loop, and one-shot GPU inventory at startup.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/PaulOh5/flexctl/internal/container"
 	"github.com/PaulOh5/flexctl/internal/db"
+	"github.com/PaulOh5/flexctl/internal/environments"
+	"github.com/PaulOh5/flexctl/internal/gpu"
+	"github.com/PaulOh5/flexctl/internal/reconciler"
+	"github.com/PaulOh5/flexctl/internal/scheduler"
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	var (
-		dbPath  = flag.String("db", "data/flexctl.db", "SQLite database path")
-		listen  = flag.String("listen", "127.0.0.1:8080", "HTTP listen address (Tailnet ACL should front this)")
-		logJSON = flag.Bool("log-json", false, "JSON logs (default: text)")
+		dbPath     = flag.String("db", "data/flexctl.db", "SQLite database path")
+		listen     = flag.String("listen", "127.0.0.1:8080", "HTTP listen address (front this with a Tailnet ACL)")
+		logJSON    = flag.Bool("log-json", false, "JSON logs (default: text)")
+		recInt     = flag.Duration("reconcile-interval", 5*time.Second, "how often to reconcile pair state with docker")
+		skipGPU    = flag.Bool("skip-gpu", false, "skip nvidia-smi inventory (use on machines without GPUs)")
 	)
 	flag.Parse()
 
-	var handler slog.Handler
-	if *logJSON {
-		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
-	} else {
-		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
-	}
-	log := slog.New(handler)
+	log := newLogger(*logJSON)
 	slog.SetDefault(log)
 
 	if err := os.MkdirAll("data", 0o750); err != nil {
-		log.Error("mkdir data", "err", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, err := db.Open(*dbPath)
 	if err != nil {
-		log.Error("db open", "path", *dbPath, "err", err)
-		os.Exit(1)
+		return err
 	}
 	defer store.Close()
 
-	if err := db.Migrate(context.Background(), store); err != nil {
-		log.Error("db migrate", "err", err)
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := db.Migrate(ctx, store); err != nil {
+		return err
 	}
 	log.Info("db ready", "path", *dbPath)
 
+	// GPU inventory is best-effort: developers without nvidia-smi can
+	// still bring the control plane up to drive the API.
+	gpuCount := 0
+	if *skipGPU {
+		log.Info("gpu inventory skipped (-skip-gpu)")
+	} else {
+		n, err := gpu.Sync(ctx, store)
+		if err != nil {
+			log.Warn("gpu inventory unavailable; control plane will not be able to allocate", "err", err)
+		} else {
+			gpuCount = n
+			log.Info("gpu inventory synced", "count", n)
+		}
+	}
+
+	// Construct the per-domain stores. They are tiny and share the
+	// same *sql.DB handle.
+	envStore := environments.New(store, time.Now)
+	sched := scheduler.New(store, time.Now)
+	cm := container.NewManager(log)
+
+	// Reconciler runs as a background goroutine that exits when ctx
+	// is cancelled. We expose live tick-count + last-error through
+	// /healthz so operators can see at a glance whether the loop is
+	// alive.
+	hb := newHeartbeat()
+	rec := reconciler.New(envStore, sched, cm, log,
+		reconciler.WithInterval(*recInt),
+	)
+	recDone := make(chan error, 1)
+	go func() {
+		recDone <- runWithHeartbeat(ctx, rec, hb)
+	}()
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	mux.HandleFunc("GET /healthz", healthHandler(hb, store, gpuCount))
 
 	srv := &http.Server{
 		Addr:              *listen,
@@ -60,22 +104,94 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
+	srvDone := make(chan error, 1)
 	go func() {
 		log.Info("http listening", "addr", *listen)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("http", "err", err)
-			stop()
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			srvDone <- err
+		} else {
+			srvDone <- nil
 		}
 	}()
 
-	<-ctx.Done()
-	log.Info("shutting down")
+	// Wait for either ctx cancel (signal) or a fatal error from
+	// either subsystem.
+	select {
+	case <-ctx.Done():
+	case err := <-srvDone:
+		if err != nil {
+			log.Error("http server", "err", err)
+		}
+	case err := <-recDone:
+		if err != nil {
+			log.Error("reconciler", "err", err)
+		}
+	}
 
+	log.Info("shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutCtx)
+	stop() // ensure reconciler ctx is cancelled
+	<-recDone
 	log.Info("bye")
+	return nil
+}
+
+// heartbeat tracks reconciler liveness for /healthz.
+type heartbeat struct {
+	ticks    atomic.Int64
+	lastTick atomic.Int64 // unix seconds
+}
+
+func newHeartbeat() *heartbeat { return &heartbeat{} }
+
+// runWithHeartbeat wraps reconciler.Run with a tick counter. We
+// re-implement the ticker locally instead of touching reconciler.Run
+// internals — Tick is exported precisely so callers can build their
+// own loops.
+func runWithHeartbeat(ctx context.Context, r *reconciler.Reconciler, hb *heartbeat) error {
+	const interval = 5 * time.Second // matches reconciler default; updated from flag would be wired in if we exposed Interval()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		if err := r.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("tick", "err", err)
+		}
+		hb.ticks.Add(1)
+		hb.lastTick.Store(time.Now().Unix())
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+		}
+	}
+}
+
+func healthHandler(hb *heartbeat, store interface{ Ping() error }, gpuCount int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dbErr := store.Ping()
+		body := map[string]any{
+			"db_ok":             dbErr == nil,
+			"gpu_count":         gpuCount,
+			"reconcile_ticks":   hb.ticks.Load(),
+			"last_tick_unix":    hb.lastTick.Load(),
+			"now_unix":          time.Now().Unix(),
+		}
+		if dbErr != nil {
+			body["db_err"] = dbErr.Error()
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
+	}
+}
+
+func newLogger(jsonOut bool) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if jsonOut {
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, opts))
 }

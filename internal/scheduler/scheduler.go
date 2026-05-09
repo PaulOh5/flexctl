@@ -217,6 +217,28 @@ func (s *Scheduler) ReclaimExpired(ctx context.Context, now time.Time) (int, err
 	return int(n), nil
 }
 
+// ReleaseByEnvID marks all active allocations belonging to envID as
+// finalState (released or failed). Used by the reconciler when an env
+// fails or stops: one call cleans up however many GPUs the env held.
+// Returns the count released. Idempotent: calling on an env with no
+// active allocations returns 0 with nil error.
+func (s *Scheduler) ReleaseByEnvID(ctx context.Context, envID, finalState string) (int, error) {
+	if finalState != StateReleased && finalState != StateFailed {
+		return 0, fmt.Errorf("invalid final state %q", finalState)
+	}
+	now := s.now().Unix()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE gpu_allocation
+		SET state = ?, released_at = ?
+		WHERE env_id = ? AND state = 'allocated'
+	`, finalState, now, envID)
+	if err != nil {
+		return 0, fmt.Errorf("release by env: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // GetByID loads an allocation by id.
 func (s *Scheduler) GetByID(ctx context.Context, id int64) (*Allocation, error) {
 	row := s.db.QueryRowContext(ctx, `
