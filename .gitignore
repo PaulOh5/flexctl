@@ -1,0 +1,33 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Dev databases
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local secrets (never commit)
+.env
+.env.*
+oauth.secret
+*.authkey
+
+# Logs
+*.log
+
+# Go workspace
+go.work
+go.work.sum
+
+# gstack workspace data (project-local cache)
+.gstack/tmp/
