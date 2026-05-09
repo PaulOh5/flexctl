@@ -249,6 +249,65 @@ func (s *Scheduler) GetByID(ctx context.Context, id int64) (*Allocation, error) 
 	return scanAllocation(row)
 }
 
+// GPUStatus joins a row from gpu_inventory with its active allocation
+// (if any). Used by the dashboard to render the GPU availability strip.
+type GPUStatus struct {
+	UUID          string
+	DeviceIndex   int
+	Name          string
+	MemoryTotalMB int
+	// Empty when free; populated when state='allocated'.
+	AllocationID int64
+	UserID       string
+	EnvID        string
+	LeasedAt     time.Time
+}
+
+// Free is true when no environment currently holds this GPU.
+func (g GPUStatus) Free() bool { return g.AllocationID == 0 }
+
+// ListGPUs returns one row per GPU in the inventory, with allocation
+// fields populated for GPUs currently in use. Ordered by device_index
+// for stable rendering.
+func (s *Scheduler) ListGPUs(ctx context.Context) ([]GPUStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+		    inv.uuid,
+		    inv.device_index,
+		    inv.name,
+		    inv.memory_total_mb,
+		    COALESCE(a.id, 0)        AS alloc_id,
+		    COALESCE(a.user_id, '')  AS user_id,
+		    COALESCE(a.env_id, '')   AS env_id,
+		    COALESCE(a.leased_at, 0) AS leased_at
+		FROM gpu_inventory inv
+		LEFT JOIN gpu_allocation a
+		    ON a.gpu_uuid = inv.uuid AND a.state = 'allocated'
+		ORDER BY inv.device_index
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list gpus: %w", err)
+	}
+	defer rows.Close()
+
+	var out []GPUStatus
+	for rows.Next() {
+		var g GPUStatus
+		var leasedAt int64
+		if err := rows.Scan(
+			&g.UUID, &g.DeviceIndex, &g.Name, &g.MemoryTotalMB,
+			&g.AllocationID, &g.UserID, &g.EnvID, &leasedAt,
+		); err != nil {
+			return nil, err
+		}
+		if leasedAt > 0 {
+			g.LeasedAt = time.Unix(leasedAt, 0)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // ListAllocated returns all currently active allocations.
 func (s *Scheduler) ListAllocated(ctx context.Context) ([]Allocation, error) {
 	rows, err := s.db.QueryContext(ctx, `

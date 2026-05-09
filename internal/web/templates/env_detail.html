@@ -1,0 +1,139 @@
+{{define "title"}}{{(index .Data "Env").TailscaleHostname}} — flexctl{{end}}
+
+{{define "head_extra"}}
+{{$env := index .Data "Env"}}
+{{/* Auto-refresh while a transition is in flight; stop once we land in
+     a terminal state to avoid hammering the control plane. */}}
+{{if or (eq $env.State "pending") (eq $env.State "stopping")}}
+<meta http-equiv="refresh" content="2">
+{{end}}
+{{end}}
+
+{{define "content"}}
+{{$d := .Data}}{{$env := $d.Env}}{{$gpu := $d.GPU}}
+
+<div class="row-spread" style="margin-bottom: var(--space-5);">
+    <div>
+        <h1 style="margin-bottom: var(--space-1);">
+            {{$env.TailscaleHostname}}
+            <span class="badge badge-{{$env.State}}" style="margin-left: var(--space-2);">
+                <span class="badge-dot" aria-hidden="true"></span>
+                {{upper $env.State}}
+            </span>
+        </h1>
+        <p class="muted" style="margin: 0;">{{$d.StateHelp}}</p>
+    </div>
+    <div class="row">
+        <a href="/" class="btn btn-ghost">&larr; Back</a>
+        {{if $d.CanStop}}
+        <form method="POST" action="/envs/{{$env.ID}}/stop">
+            <button type="submit" class="btn btn-danger">Stop</button>
+        </form>
+        {{end}}
+    </div>
+</div>
+
+{{if $env.LastExitReason}}
+<div class="alert alert-error" role="alert">
+    <strong>Last exit reason:</strong> {{$env.LastExitReason}}
+</div>
+{{end}}
+
+<section class="card" aria-labelledby="ssh-h">
+    <h2 id="ssh-h">Connect</h2>
+    {{if eq $env.State "running"}}
+    <p class="muted">From any device on your tailnet:</p>
+    {{else}}
+    <p class="muted">SSH will work once the environment reaches <strong>RUNNING</strong>.</p>
+    {{end}}
+    <details open>
+        <summary class="muted" style="cursor: pointer; padding: var(--space-2) 0;">
+            Show command for {{upper $d.PreferredOS}} (auto-detected from your browser)
+        </summary>
+        {{range $d.Commands}}
+        {{if eq .OS $d.PreferredOS}}
+        <div class="copy-wrap" style="margin-top: var(--space-2);">
+            <pre>{{.Cmd}}</pre>
+            <button type="button" class="btn"
+                    onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent.trim())"
+                    aria-label="Copy SSH command">
+                Copy
+            </button>
+        </div>
+        <p class="help" style="margin-top: var(--space-2);">{{.Hint}}</p>
+        {{end}}
+        {{end}}
+    </details>
+
+    <details style="margin-top: var(--space-4);">
+        <summary class="muted" style="cursor: pointer; padding: var(--space-2) 0;">Other options</summary>
+        {{range $d.Commands}}
+        {{if ne .OS $d.PreferredOS}}
+        <div style="margin-top: var(--space-3);">
+            <div class="muted" style="font-size: 12px; margin-bottom: var(--space-1);">{{upper .OS}}</div>
+            <div class="copy-wrap">
+                <pre>{{.Cmd}}</pre>
+                <button type="button" class="btn"
+                        onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent.trim())">
+                    Copy
+                </button>
+            </div>
+            <p class="help" style="margin-top: var(--space-1);">{{.Hint}}</p>
+        </div>
+        {{end}}
+        {{end}}
+    </details>
+</section>
+
+<section class="card" aria-labelledby="details-h" style="margin-top: var(--space-4);">
+    <h2 id="details-h">Details</h2>
+    <dl class="kv">
+        <dt>State</dt>
+        <dd>
+            <span class="badge badge-{{$env.State}}">
+                <span class="badge-dot" aria-hidden="true"></span>
+                {{upper $env.State}}
+            </span>
+        </dd>
+
+        <dt>Image</dt>
+        <dd class="mono">{{$env.Image}}</dd>
+
+        {{if $gpu}}
+        <dt>GPU</dt>
+        <dd>
+            GPU {{$gpu.DeviceIndex}} &middot; {{$gpu.Name}}
+            <div class="mono muted" style="font-size: 11px;">{{$gpu.UUID}}</div>
+        </dd>
+        {{end}}
+
+        <dt>Tailscale hostname</dt>
+        <dd class="mono">{{$env.TailscaleHostname}}</dd>
+
+        <dt>Created</dt>
+        <dd>{{$env.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
+
+        {{if $env.StartedAt}}
+        <dt>Started</dt>
+        <dd>{{$env.StartedAt.Format "2006-01-02 15:04:05"}}</dd>
+        {{end}}
+
+        {{if $env.StoppedAt}}
+        <dt>Stopped</dt>
+        <dd>{{$env.StoppedAt.Format "2006-01-02 15:04:05"}}</dd>
+        {{end}}
+
+        {{if $env.SidecarContainerID}}
+        <dt>Sidecar</dt>
+        <dd class="mono">{{truncID $env.SidecarContainerID}}</dd>
+        {{end}}
+
+        {{if $env.WorkContainerID}}
+        <dt>Work</dt>
+        <dd class="mono">{{truncID $env.WorkContainerID}}</dd>
+        {{end}}
+    </dl>
+</section>
+{{end}}
+
+{{define "footer"}}env id <span class="mono">{{(index .Data "Env").ID}}</span>{{end}}

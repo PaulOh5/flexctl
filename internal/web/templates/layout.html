@@ -1,0 +1,38 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>{{block "title" .}}flexctl{{end}}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js" defer></script>
+    {{block "head_extra" .}}{{end}}
+</head>
+<body>
+<nav class="app-nav" aria-label="Primary">
+    <a href="/" class="brand" aria-label="flexctl home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        flexctl
+    </a>
+    <div class="spacer"></div>
+    {{if .CurrentUser}}
+        <span class="user-pill" title="signed in as">
+            <span class="sr-only">Signed in as</span>{{.CurrentUser.Email}}
+        </span>
+        <a href="/users" class="btn btn-ghost">Switch</a>
+    {{else if .Users}}
+        <a href="/users" class="btn btn-ghost">Pick user</a>
+    {{end}}
+</nav>
+
+<main class="app-main" id="main">
+    {{if .Flash}}<div class="alert alert-{{.Flash.Kind}}" role="status">{{.Flash.Msg}}</div>{{end}}
+    {{block "content" .}}{{end}}
+</main>
+
+<footer class="app-footer">
+    flexctl &middot; {{block "footer" .}}{{end}}
+</footer>
+</body>
+</html>{{end}}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +22,9 @@ import (
 	"github.com/PaulOh5/flexctl/internal/gpu"
 	"github.com/PaulOh5/flexctl/internal/reconciler"
 	"github.com/PaulOh5/flexctl/internal/scheduler"
+	"github.com/PaulOh5/flexctl/internal/tailscale"
+	"github.com/PaulOh5/flexctl/internal/users"
+	"github.com/PaulOh5/flexctl/internal/web"
 )
 
 func main() {
@@ -37,6 +41,14 @@ func run() error {
 		logJSON    = flag.Bool("log-json", false, "JSON logs (default: text)")
 		recInt     = flag.Duration("reconcile-interval", 5*time.Second, "how often to reconcile pair state with docker")
 		skipGPU    = flag.Bool("skip-gpu", false, "skip nvidia-smi inventory (use on machines without GPUs)")
+		tsClientID = flag.String("ts-client-id", os.Getenv("FLEXCTL_TS_CLIENT_ID"),
+			"Tailscale OAuth client id (or set FLEXCTL_TS_CLIENT_ID)")
+		tsClientSecret = flag.String("ts-client-secret", os.Getenv("FLEXCTL_TS_CLIENT_SECRET"),
+			"Tailscale OAuth client secret (or set FLEXCTL_TS_CLIENT_SECRET)")
+		tailnetName = flag.String("tailnet", os.Getenv("FLEXCTL_TAILNET"),
+			"Tailnet magic-DNS suffix, e.g. tail1234.ts.net (or set FLEXCTL_TAILNET); used to render copy-pasteable SSH commands")
+		hostHomeRoot = flag.String("host-home-root", "/var/lib/flexctl/home",
+			"parent directory for per-user home volumes")
 	)
 	flag.Parse()
 
@@ -80,7 +92,35 @@ func run() error {
 	// same *sql.DB handle.
 	envStore := environments.New(store, time.Now)
 	sched := scheduler.New(store, time.Now)
+	userStore := users.New(store, time.Now)
 	cm := container.NewManager(log)
+
+	// Tailscale provisioner is optional. Without OAuth creds the web
+	// UI shows a clear error on env creation and the rest of the
+	// control plane keeps running.
+	var tsProv *tailscale.Provisioner
+	if *tsClientID != "" && *tsClientSecret != "" {
+		tsProv = tailscale.New(*tsClientID, *tsClientSecret)
+		log.Info("tailscale provisioner ready", "tailnet", *tailnetName)
+	} else {
+		log.Warn("tailscale OAuth not configured; env creation disabled until -ts-client-id and -ts-client-secret are set")
+	}
+
+	webDeps := web.Deps{
+		Users:        userStore,
+		Envs:         envStore,
+		Sched:        sched,
+		Container:    cm,
+		TailnetName:  *tailnetName,
+		HostHomeRoot: *hostHomeRoot,
+	}
+	if tsProv != nil {
+		webDeps.Tailscale = tsProv
+	}
+	webSrv, err := web.NewServer(webDeps, log)
+	if err != nil {
+		return fmt.Errorf("web init: %w", err)
+	}
 
 	// Reconciler runs as a background goroutine that exits when ctx
 	// is cancelled. We expose live tick-count + last-error through
@@ -97,6 +137,7 @@ func run() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(hb, store, gpuCount))
+	webSrv.Routes(mux)
 
 	srv := &http.Server{
 		Addr:              *listen,

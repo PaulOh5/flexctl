@@ -1,0 +1,85 @@
+{{define "title"}}New environment — flexctl{{end}}
+
+{{define "content"}}
+{{$d := .Data}}
+
+<h1>New environment</h1>
+<p class="muted">
+    {{$d.GPUsFree}} of {{$d.GPUsTotal}} GPU{{if ne $d.GPUsTotal 1}}s{{end}} free.
+    Each environment runs on a single GPU and is reachable over your tailnet.
+</p>
+
+{{if not $d.TSConfigured}}
+<div class="alert alert-error" role="alert">
+    Tailscale OAuth is not configured on this control plane. Pass
+    <code>-ts-client-id</code> and <code>-ts-client-secret</code> (or
+    <code>FLEXCTL_TS_CLIENT_ID</code> / <code>FLEXCTL_TS_CLIENT_SECRET</code> env vars)
+    and restart. Until then environments cannot reach the tailnet.
+</div>
+{{end}}
+
+{{if $d.UserHasEnv}}
+<div class="alert alert-warning" role="alert">
+    You already have an active environment.
+    <a href="/">Open the dashboard</a> to find it.
+    Phase 1 limits each user to one environment at a time.
+</div>
+{{end}}
+
+{{if $d.BoxAtCap}}
+<div class="alert alert-warning" role="alert">
+    All GPUs on this host are in use. Try again in a few minutes,
+    or wait for someone&rsquo;s environment to release one.
+</div>
+{{end}}
+
+<section class="card">
+    <form method="POST" action="/envs" class="stack">
+        <fieldset class="form-row" style="border:0; padding:0; margin:0;">
+            <legend style="font-size:13px; color: var(--text-muted); margin-bottom: var(--space-2);">
+                Image
+            </legend>
+            <div class="stack" style="margin-top: var(--space-2);">
+                {{range $i, $opt := $d.Images}}
+                <label class="card" style="display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3) var(--space-4); cursor: pointer;">
+                    <input type="radio" name="image" value="{{$opt.Image}}"
+                           {{if eq $opt.Image $d.DefaultImg}}checked{{end}} required
+                           style="margin-top: 4px;">
+                    <span>
+                        <strong>{{$opt.Name}}</strong>
+                        <div class="muted" style="font-size: 12px; margin-top: 2px;">{{$opt.Description}}</div>
+                        <code style="font-size: 11px; margin-top: var(--space-1); display: inline-block;">{{$opt.Image}}</code>
+                    </span>
+                </label>
+                {{end}}
+            </div>
+        </fieldset>
+
+        <div class="form-row">
+            <label for="authorized_key">SSH public key (optional)</label>
+            <textarea class="input" id="authorized_key" name="authorized_key"
+                      placeholder="ssh-ed25519 AAAA... user@laptop"
+                      autocomplete="off"
+                      spellcheck="false"
+                      rows="3"></textarea>
+            <p class="help">
+                Paste <code>~/.ssh/id_ed25519.pub</code> (or your RSA equivalent) so SSH uses keys.
+                If empty, the work container falls back to passwordless root over Tailscale &mdash;
+                fine for a private tailnet, but please add a key for anything serious.
+            </p>
+        </div>
+
+        <div class="row-spread">
+            <a href="/" class="btn btn-ghost">Cancel</a>
+            <button type="submit" class="btn btn-primary"
+                    {{if or (not $d.TSConfigured) $d.UserHasEnv $d.BoxAtCap}}disabled{{end}}>
+                Create environment
+            </button>
+        </div>
+    </form>
+</section>
+{{end}}
+
+{{define "footer"}}
+{{$d := .Data}}{{$d.GPUsFree}} of {{$d.GPUsTotal}} GPUs free
+{{end}}

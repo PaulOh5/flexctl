@@ -414,6 +414,47 @@ func TestReleaseByEnvID(t *testing.T) {
 	}
 }
 
+// TestListGPUs joins inventory with active allocations.
+func TestListGPUs(t *testing.T) {
+	s, _, _ := newTestSched(t, 4)
+	ctx := context.Background()
+
+	// All free at start.
+	got, err := s.ListGPUs(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d, want 4", len(got))
+	}
+	for i, g := range got {
+		if !g.Free() {
+			t.Errorf("gpu %d should be free", i)
+		}
+		if g.DeviceIndex != i {
+			t.Errorf("gpu %d device_index=%d", i, g.DeviceIndex)
+		}
+	}
+
+	// Allocate one and verify the join populates owner fields.
+	if _, err := s.Allocate(ctx, "u1", envID(0), []string{gpuUUID(2)}, 30*time.Second); err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	got, _ = s.ListGPUs(ctx)
+	for i, g := range got {
+		if g.DeviceIndex == 2 {
+			if g.Free() {
+				t.Errorf("gpu 2 should be busy")
+			}
+			if g.UserID != "u1" || g.EnvID != envID(0) {
+				t.Errorf("gpu 2 owner mismatch: user=%q env=%q", g.UserID, g.EnvID)
+			}
+		} else if !g.Free() {
+			t.Errorf("gpu %d should be free", i)
+		}
+	}
+}
+
 func TestReleaseByEnvIDInvalidState(t *testing.T) {
 	s, _, _ := newTestSched(t, 1)
 	if _, err := s.ReleaseByEnvID(context.Background(), envID(0), "allocated"); err == nil {

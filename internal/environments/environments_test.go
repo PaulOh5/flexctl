@@ -175,6 +175,25 @@ func TestAssignContainersBlockedAfterTerminal(t *testing.T) {
 	}
 }
 
+// TestAssignContainersAllowedInStopping covers the race where the user
+// hits Stop while StartPair is still placing the pair: we must still
+// record the IDs so the reconciler can tear them down.
+func TestAssignContainersAllowedInStopping(t *testing.T) {
+	s, uid, _, _ := envFixture(t)
+	ctx := context.Background()
+	e, _ := s.Create(ctx, uid, "img")
+	_ = s.SetState(ctx, e.ID, StateRunning)
+	_ = s.SetState(ctx, e.ID, StateStopping)
+
+	if err := s.AssignContainers(ctx, e.ID, "ts-1", "work-1", "h"); err != nil {
+		t.Errorf("assign in stopping: %v", err)
+	}
+	got, _ := s.GetByID(ctx, e.ID)
+	if got.SidecarContainerID != "ts-1" {
+		t.Errorf("ids not recorded in stopping: %+v", got)
+	}
+}
+
 func TestSetExitReason(t *testing.T) {
 	s, uid, _, _ := envFixture(t)
 	ctx := context.Background()

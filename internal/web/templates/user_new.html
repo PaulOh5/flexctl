@@ -1,0 +1,33 @@
+{{define "title"}}Add user — flexctl{{end}}
+
+{{define "content"}}
+<h1>Add a user</h1>
+<p class="muted">Each user gets a unique host UID for their home volume and an isolated container pair when they create an environment.</p>
+
+{{$cap := index .Data "AtCapacity"}}{{$max := index .Data "MaxUsers"}}{{$emailIn := index .Data "Email"}}
+
+{{if $cap}}
+<div class="alert alert-warning" role="status">
+    This host is at capacity: {{ len .Users }} of {{$max}} users registered. New user creation is disabled until one is removed.
+</div>
+{{end}}
+
+<section class="card">
+    <form method="POST" action="/users" class="stack">
+        <div class="form-row">
+            <label for="email">Email</label>
+            <input class="input" id="email" name="email" type="email" required autocomplete="email"
+                   value="{{$emailIn}}"
+                   placeholder="alice@example.com"
+                   {{if $cap}}disabled{{end}}>
+            <p class="help">Used as the display name and the cookie key. Not sent anywhere.</p>
+        </div>
+        <div class="row-spread">
+            <a href="/users" class="btn btn-ghost">Cancel</a>
+            <button type="submit" class="btn btn-primary" {{if $cap}}disabled{{end}}>Create user</button>
+        </div>
+    </form>
+</section>
+{{end}}
+
+{{define "footer"}}{{ len .Users }} of {{ index .Data "MaxUsers" }} users on this host{{end}}

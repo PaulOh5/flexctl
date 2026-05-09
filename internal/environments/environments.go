@@ -86,13 +86,15 @@ func (s *Store) Create(ctx context.Context, userID, image string) (*Environment,
 }
 
 // AssignContainers sets the sidecar/work container IDs and the tailnet
-// hostname after Docker has placed the pair. Allowed in pending or
-// running state.
+// hostname after Docker has placed the pair. Allowed in any non-
+// terminal state — including stopping, which can happen if the user
+// hits Stop while StartPair is still in flight. Recording the IDs lets
+// the reconciler tear the pair down cleanly even in that race.
 func (s *Store) AssignContainers(ctx context.Context, id, sidecarID, workID, tsHostname string) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE environments
 		SET sidecar_container_id = ?, work_container_id = ?, tailscale_hostname = ?
-		WHERE id = ? AND state IN ('pending','running')
+		WHERE id = ? AND state IN ('pending','running','stopping')
 	`, sidecarID, workID, tsHostname, id)
 	if err != nil {
 		return fmt.Errorf("assign containers: %w", err)

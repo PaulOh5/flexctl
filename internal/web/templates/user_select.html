@@ -1,0 +1,42 @@
+{{define "title"}}Pick user — flexctl{{end}}
+
+{{define "content"}}
+<h1>Pick a user</h1>
+<p class="muted">Sign in as one of the registered users on this host. The selection persists in a cookie.</p>
+
+<section class="card">
+    <ul class="stack" style="list-style: none; padding: 0; margin: 0;">
+        {{range .Users}}
+        <li>
+            <form method="POST" action="/users/select" class="row-spread">
+                <input type="hidden" name="email" value="{{.Email}}">
+                <div>
+                    <strong>{{.Email}}</strong>
+                    <span class="muted"> · UID {{.HostUID}}</span>
+                </div>
+                <button type="submit" class="btn btn-primary">Select</button>
+            </form>
+        </li>
+        {{end}}
+    </ul>
+</section>
+
+{{$cap := index .Data "AtCapacity"}}{{$max := index .Data "MaxUsers"}}
+{{if $cap}}
+<p class="muted center" style="margin-top: var(--space-5);">
+    This host is at capacity ({{$max}} users). Add more by selling another GPU server.
+</p>
+{{else}}
+<p class="center" style="margin-top: var(--space-5);">
+    <a href="/users/new" class="btn">+ Add user</a>
+</p>
+{{end}}
+
+{{if .CurrentUser}}
+<form method="POST" action="/users/sign-out" style="margin-top: var(--space-5); text-align: center;">
+    <button type="submit" class="btn btn-ghost">Sign out</button>
+</form>
+{{end}}
+{{end}}
+
+{{define "footer"}}{{end}}

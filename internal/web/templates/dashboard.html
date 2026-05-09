@@ -1,0 +1,105 @@
+{{define "title"}}{{.CurrentUser.Email}} — flexctl{{end}}
+
+{{define "content"}}
+{{$d := .Data}}
+
+<div class="row-spread" style="margin-bottom: var(--space-5);">
+    <div>
+        <h1>Welcome back, {{.CurrentUser.Email}}</h1>
+        <p class="muted">Host UID {{.CurrentUser.HostUID}} &middot; joined {{.CurrentUser.CreatedAt.Format "2006-01-02"}}</p>
+    </div>
+    {{if not $d.HasEnvs}}
+        <a href="/envs/new" class="btn btn-primary btn-large"
+           {{if $d.BoxAtCap}}aria-disabled="true" title="All GPUs are in use"{{end}}>
+            + New environment
+        </a>
+    {{end}}
+</div>
+
+<section class="card" aria-labelledby="gpu-availability-h">
+    <div class="row-spread">
+        <h2 id="gpu-availability-h">GPU availability</h2>
+        <span class="muted">{{$d.GPUsFree}} of {{$d.GPUsTotal}} free</span>
+    </div>
+    {{if eq $d.GPUsTotal 0}}
+        <p class="muted" style="margin-top: var(--space-3);">
+            No GPUs registered. Run <code>nvidia-smi</code> on the host and restart the control plane,
+            or pass <code>-skip-gpu</code> for development without GPUs.
+        </p>
+    {{else}}
+        <div class="gpu-bar" role="list" aria-label="GPU slots">
+            {{range $d.GPUs}}
+            <div class="gpu-cell {{if not .Free}}gpu-busy{{end}}" role="listitem"
+                 aria-label="GPU {{.DeviceIndex}} {{if .Free}}free{{else}}busy{{end}}">
+                <div>GPU {{.DeviceIndex}} &middot; {{.Name}}</div>
+                <div class="gpu-id">{{truncID .UUID}}</div>
+                {{if not .Free}}
+                    <div class="muted" style="margin-top: var(--space-1);">env {{truncID .EnvID}}</div>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+    {{end}}
+</section>
+
+<section class="card" aria-labelledby="my-envs-h" style="margin-top: var(--space-4);">
+    <div class="section-head">
+        <h2 id="my-envs-h" style="margin: 0;">Your environments</h2>
+        <div class="grow"></div>
+        {{if $d.HasEnvs}}
+            <a href="/envs/new" class="btn btn-ghost"
+               {{if $d.BoxAtCap}}aria-disabled="true" title="All GPUs are in use"{{end}}>
+                + New
+            </a>
+        {{end}}
+    </div>
+
+    {{if not $d.MyEnvs}}
+        <div class="empty">
+            <h2>You don&rsquo;t have any environments yet.</h2>
+            <p>Create one to get a GPU container reachable over Tailscale in about five minutes.</p>
+            <a href="/envs/new" class="btn btn-primary btn-large"
+               {{if $d.BoxAtCap}}aria-disabled="true" title="All GPUs are in use"{{end}}>
+                + New environment
+            </a>
+        </div>
+    {{else}}
+        <div class="stack">
+            {{range $d.MyEnvs}}
+                {{template "env_card" .}}
+            {{end}}
+        </div>
+    {{end}}
+</section>
+{{end}}
+
+{{define "footer"}}
+{{$d := .Data}}
+{{$d.UserCount}} of 5 users on this host
+{{if $d.UserAtCap}} &middot; capacity{{end}}
+{{end}}
+
+{{/*
+    env_card is a self-contained block for one env so it can be reused
+    later in HTMX swaps. {{.}} is an envCardView.
+*/}}
+{{define "env_card"}}
+<div class="card-row" id="env-card-{{.Env.ID}}" data-state="{{.Env.State}}">
+    <div style="flex: 1;">
+        <div class="row" style="margin-bottom: var(--space-2);">
+            <a href="/envs/{{.Env.ID}}"><strong>{{.Hostname}}</strong></a>
+            <span class="badge badge-{{.Env.State}}"
+                  aria-label="state {{upper .Env.State}}">
+                <span class="badge-dot" aria-hidden="true"></span>
+                {{upper .Env.State}}
+            </span>
+            {{if .GPU}}<span class="muted">GPU {{.GPU.DeviceIndex}}</span>{{end}}
+        </div>
+        <div class="muted" style="font-size: 12px;">
+            {{.Env.Image}}
+            {{if .Env.LastExitReason}}&middot; <span style="color: var(--danger)">{{.Env.LastExitReason}}</span>{{end}}
+        </div>
+    </div>
+    <a href="/envs/{{.Env.ID}}" class="btn btn-ghost">Open</a>
+</div>
+{{end}}
