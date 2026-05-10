@@ -1,0 +1,53 @@
+[Unit]
+Description=flexctl GPU sharing control plane
+Documentation=https://github.com/PaulOh5/flexctl
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=flexctl
+Group=flexctl
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/flexctl
+
+# OAuth credentials are loaded from this file. The leading `-` makes
+# systemd not fail when the file is missing (first boot before the
+# operator runs setup-oauth); the binary then renders the
+# "OAuth not configured" alert in the UI until the file exists.
+EnvironmentFile=-/etc/flexctl/oauth.env
+
+ExecStart=/usr/local/bin/flexctl \
+    -db /var/lib/flexctl/flexctl.db \
+    -listen 0.0.0.0:8080 \
+    -host-home-root /var/lib/flexctl/home \
+    -log-json
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Process hardening. The flexctl process itself does not need root;
+# everything privileged (docker calls) goes through the docker group.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+
+# Resource ceilings: a single control plane should not eat the host.
+LimitNOFILE=65536
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=4096
+
+# Logs go to journal so 'journalctl -u flexctl' is the runbook entry.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
