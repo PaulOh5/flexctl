@@ -155,10 +155,18 @@ func SidecarRunArgs(spec EnvSpec) []string {
 // Both reference UUID, never index, so a host reboot's device reorder
 // can't leak access to the wrong device.
 func WorkRunArgs(spec EnvSpec) []string {
+	// NOTE: do NOT pass --hostname here. Docker rejects --hostname when
+	// combined with `--network container:<name>` because the joining
+	// container does not own its network namespace (and therefore not
+	// its hostname); the sidecar already set TailscaleHostname when it
+	// joined the tailnet, and the work container inherits it via the
+	// shared netns. Adding --hostname here gets you:
+	//   docker: Error response from daemon: conflicting options:
+	//   hostname and the network mode
+	// — which is exit 125 at create time and a FAILED env in the UI.
 	return []string{
 		"run", "-d",
 		"--name", WorkName(spec.EnvID),
-		"--hostname", spec.TailscaleHostname,
 		"--network", "container:" + SidecarName(spec.EnvID),
 		"--gpus", "device=" + spec.GPUUUID,
 		"--security-opt=no-new-privileges:true",

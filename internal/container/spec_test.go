@@ -64,6 +64,20 @@ func TestSidecarUserspaceOverride(t *testing.T) {
 	mustHaveEnv(t, SidecarRunArgs(s), "TS_USERSPACE=true")
 }
 
+// Regression: Docker rejects --hostname when combined with
+// `--network container:<sidecar>` (exit 125 at create time). The
+// sidecar already set the hostname when it joined the tailnet; the
+// work container shares its netns and must not try to set a separate
+// one.
+func TestWorkRunArgsHasNoHostnameFlag(t *testing.T) {
+	args := WorkRunArgs(sampleSpec())
+	for i, a := range args {
+		if a == "--hostname" {
+			t.Errorf("argv must not contain --hostname (it conflicts with --network container:): saw at %d, full argv: %v", i, args)
+		}
+	}
+}
+
 func TestWorkRunArgsSharesNamespaceAndPinsGPU(t *testing.T) {
 	s := sampleSpec()
 	args := WorkRunArgs(s)
